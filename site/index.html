@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prioritizing Content Review: Historical Freshness and Search-Performance Signals vs. a Transparent Rule Baseline</title>
+  <meta name="description" content="A client-grouped evaluation of a Random Forest ranking model against a transparent rule baseline for prioritizing which pages to review first, built on the anonymized FlyRank ML Internship dataset.">
+  <meta name="author" content="Raihan Basha">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a class="brand" href="#overview">
+        <span class="brand__title">Content-Review Prioritization</span>
+        <span class="brand__sub">FlyRank ML Internship · Capstone Paper</span>
+      </a>
+      <nav class="site-nav" aria-label="Paper sections">
+        <ul>
+          <li><a href="#overview">Overview</a></li>
+          <li><a href="#data">Data</a></li>
+          <li><a href="#method">Method</a></li>
+          <li><a href="#results">Results</a></li>
+          <li><a href="#limitations">Limitations</a></li>
+          <li><a href="#recommendations">Recommendations</a></li>
+          <li><a href="#reproducibility">Reproducibility</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ============ HERO / TITLE ============ -->
+    <section class="hero">
+      <div class="article-col">
+        <h1>Prioritizing Which Pages to Review First: Historical Freshness and Search-Performance Signals vs. a Transparent Rule Baseline</h1>
+        <p class="hero__subtitle">Can historical content-freshness and search-performance signals help prioritize which pages deserve human review, and does a learned model improve the precision of a transparent rule-based baseline on unseen clients?</p>
+        <p class="hero__meta">
+          <span class="hero__author">Raihan Basha</span>
+          <span class="hero__dot" aria-hidden="true">·</span>
+          FlyRank ML Internship Capstone
+        </p>
+        <p class="hero__links">
+          <a href="https://github.com/RaihanBasha7/flyrank-ml-internship">Repository</a>
+          <span class="hero__dot" aria-hidden="true">·</span>
+          <a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/capstone.ipynb">Capstone notebook</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ OVERVIEW / ABSTRACT ============ -->
+    <section id="overview" class="section" aria-labelledby="overview-heading">
+      <div class="article-col">
+        <h2 id="overview-heading">Overview</h2>
+
+        <h3>Abstract</h3>
+        <p>Content teams cannot review every page of a large inventory at once, so this work asks whether historical content-freshness and search-performance signals can help prioritize which pages to review first &mdash; and whether a learned model improves the precision of a transparent rule baseline on unseen clients. Using 30,000 anonymized pages across 32 clients from the FlyRank ML Internship dataset, I trained a Random Forest on six historical features (content age, days since last update, 90-day impressions, average position, click-through rate, and word count) and compared it with a Week-4 transparent rule baseline. Both methods were validated on the same client-grouped holdout &mdash; 25 training clients and 7 held-out clients with zero client overlap &mdash; so no page from a training client appeared in the test set. On that holdout, the Random Forest raised Precision@20 from 0.55 to 0.85 and Precision@50 from 0.52 to 0.70 and improved accuracy (0.4897 &rarr; 0.5629) and F1 (0.5813 &rarr; 0.5928), while recall decreased from 0.6932 to 0.6227. This is decision-support evidence for ranking a limited review queue &mdash; not causal proof, and not a guarantee of future production performance &mdash; and the recall trade-off should be weighed when choosing a review policy.</p>
+
+        <h3>The problem in one paragraph</h3>
+        <p>Given limited editorial or content-review capacity, which pages should be reviewed first? A prioritization system can direct human attention toward pages whose historical freshness and search-performance signals are associated with declining performance. The output of this project is a <strong>ranked review queue</strong>: a decision-support tool that helps a human team decide what to inspect, not an automated system that changes content.</p>
+
+        <h3>Why a baseline is necessary</h3>
+        <p>A model is only useful if it beats the obvious alternative. The transparent rule baseline is that alternative: a simple, explainable scoring rule based on content staleness, search visibility, click-through rate, and search position. Because both approaches are evaluated on the <em>same</em> client-grouped holdout with the <em>same</em> labels, any difference between them is attributable to the method itself, not to different data or different validation design.</p>
+
+        <h3>What success means here</h3>
+        <p>Success is measured by whether the model concentrates more labeled-declining pages near the top of the review queue than the rule baseline &mdash; in other words, whether it improves Precision@20 and Precision@50 on clients it has never seen. Accuracy, precision, recall, and F1 provide additional context. Because the practical workflow has limited review capacity, the quality of the top of the queue matters more than an unrestricted prediction over every page.</p>
+      </div>
+    </section>
+
+    <!-- ============ DATA ============ -->
+    <section id="data" class="section" aria-labelledby="data-heading">
+      <div class="article-col">
+        <h2 id="data-heading">Data</h2>
+
+        <h3>Dataset and release</h3>
+        <p>This project uses the anonymized FlyRank ML Internship starter dataset, <code>data/raw/content_refresh_anonymized.csv</code>, provided as part of the internship workflow. It is a public-safe research dataset: it contains <strong>no client names, domains, URLs, page titles, keywords, or raw search queries</strong> &mdash; only hashed identifiers plus numeric and categorical metrics.</p>
+        <ul>
+          <li><strong>Rows:</strong> 30,000 anonymized content items (one row per page)</li>
+          <li><strong>Clients:</strong> 32 pseudonymized clients</li>
+          <li><strong>Columns:</strong> 44 in the shipped export; 45 in the validation workflow after deriving the target label</li>
+          <li><strong>Window:</strong> metrics are aggregated over a trailing 90-day window ending at export time (feature semantics documented below)</li>
+        </ul>
+        <p>Because the available materials document trailing-90-day metrics but do not provide a public calendar date range, this paper describes the observed windows using the documented feature semantics rather than inventing start and end dates.</p>
+
+        <h3>Unit of analysis</h3>
+        <p>Each row is one anonymized content observation associated with a client and its measured content and search-performance attributes. The declining-content target is <code>is_declining_label</code>, derived from the observed trend direction: <code>is_declining_label = (trend_direction == "down")</code>, where <code>down</code> reflects a recent 30-day impression comparison. In this dataset, <strong>16,262 of 30,000 rows (54.2%)</strong> carry the declining label &mdash; the observed base rate.</p>
+
+        <figure class="figure">
+          <img src="assets/charts/trend_distribution.svg" alt="Bar chart of the observed trend direction distribution across the 30,000 pages: down about 16,300, stable about 5,960, up about 4,390, new about 2,240, and flat about 1,150." width="960" height="520" loading="lazy">
+          <figcaption>Observed trend-direction distribution across the 30,000 pages (generated from the repository&rsquo;s reference pipeline on the same starter dataset). The <code>down</code> class, which defines the declining label, is the largest group and sets the 54.2% base rate.</figcaption>
+        </figure>
+
+        <h3>Identifiers and how they are used</h3>
+        <p><code>client_id</code> is used <strong>only</strong> to build the grouped validation split; <code>content_id</code> is treated as a row identifier. Neither is used as a predictive feature, and no attempt is made to map the hashed identifiers back to any real entity.</p>
+
+        <h3>Exclusions and why they were made</h3>
+        <p>The following fields are excluded from the predictive feature set:</p>
+        <table class="table">
+          <caption>Excluded fields and the reason for each exclusion</caption>
+          <thead>
+            <tr><th scope="col">Field</th><th scope="col">Why it is excluded</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>is_declining_label</code></td><td>The target itself</td></tr>
+            <tr><td><code>trend_direction</code></td><td>Directly used to define the target</td></tr>
+            <tr><td><code>trend_pct</code></td><td>Source information used to derive the trend direction</td></tr>
+            <tr><td><code>client_id</code></td><td>Grouping identifier; must not become a shortcut for client-specific patterns</td></tr>
+            <tr><td><code>content_id</code></td><td>Row identifier rather than a generalizable content signal</td></tr>
+          </tbody>
+        </table>
+        <p>These exclusions reduce the risk of leaking label information into the model and prevent the model from learning client- or row-identity shortcuts instead of patterns that may generalize to unseen clients. No rows were dropped: all 30,000 rows are partitioned into training (23,837) and test (6,163) sets.</p>
+
+        <h3>Public-safety constraints</h3>
+        <p>All findings reported here are aggregate, model-level, or metric-level results. No raw dataset values, row-level identifying details, or private queries are reproduced in this paper.</p>
+      </div>
+    </section>
+
+    <!-- ============ METHODOLOGY ============ -->
+    <section id="method" class="section" aria-labelledby="method-heading">
+      <div class="article-col">
+        <h2 id="method-heading">Methodology</h2>
+
+        <h3>Prediction target</h3>
+        <p>The supervised target is <code>is_declining_label</code>, defined from whether the observed trend direction is <code>down</code>. The target is used only for evaluation; it and its source fields are never included as features.</p>
+
+        <h3>Features (the final model uses six predictors)</h3>
+        <table class="table">
+          <caption>The six historical features used by the final Random Forest</caption>
+          <thead>
+            <tr><th scope="col">Feature</th><th scope="col">What it represents</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>content_age_days</code></td><td>Days since the content was created (every row in this slice is &ge; 90 days old)</td></tr>
+            <tr><td><code>days_since_last_update</code></td><td>Days since the content was last updated</td></tr>
+            <tr><td><code>impressions_90d</code></td><td>Search impressions over the trailing 90-day window</td></tr>
+            <tr><td><code>avg_position</code></td><td>Mean search position over the window (lower is better)</td></tr>
+            <tr><td><code>ctr</code></td><td>Click-through rate, a percentage on a 0&ndash;100 scale</td></tr>
+            <tr><td><code>word_count</code></td><td>Article length</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Assumptions</h3>
+        <p>The primary assumption is that the available historical features are appropriate for a decision-support ranking setting. The results are interpreted as measured associations and ranking performance on this dataset &mdash; not as causal evidence that changing a page improves its performance.</p>
+
+        <h3>Transparent rule baseline (Week 4)</h3>
+        <p>The baseline is a hand-written, fully explainable scoring rule rather than a learned model. A page receives positive signals when it is stale (a long time since its last update), receives meaningful search impressions, has a low click-through rate, or ranks outside the first page of search results. The conditions are combined into a transparent score (0&ndash;3 in the grouped evaluation) that produces human-readable reason codes such as <code>STALE_VISIBLE</code>, <code>LOW_CTR</code>, <code>LOW_VISIBILITY</code>, and <code>HIGH_PRIORITY_REVIEW</code>. This provides a meaningful comparison: the model is judged against a practical rule-based approach, not against nothing.</p>
+
+        <h3>Random Forest model</h3>
+        <p>A Random Forest classifier is used as the machine-learning approach. It was selected as a practical nonlinear model that can learn interactions between freshness and search-performance signals without requiring the prioritization rule to be specified by hand, and that provides feature-importance output for interpretability. The reported numbers are measured performance for this model configuration on this dataset and validation design; they do not establish that Random Forest is universally the best model for content prioritization.</p>
+
+        <h3>Evaluation metrics</h3>
+        <p>Both approaches are evaluated as <strong>ranked prioritization systems</strong>. The primary metrics are <strong>Precision@20</strong> and <strong>Precision@50</strong> &mdash; the proportion of truly declining pages among the top 20 and top 50 ranked recommendations &mdash; because a human team may only have capacity to review a limited number of pages. Accuracy, precision, recall, and F1 are reported for additional context. The model and baseline are evaluated on the <strong>same test rows and against the same labels</strong>.</p>
+
+        <h3>Validation design: client-grouped holdout</h3>
+        <p>The primary validation uses a <strong>client-grouped</strong> split (via <code>GroupShuffleSplit</code>, 80/20, fixed seed <code>random_state=42</code>):</p>
+        <ul>
+          <li><strong>25 training clients</strong> &middot; <strong>7 test clients</strong> &middot; <strong>0 client overlap</strong></li>
+          <li>Training rows: 23,837 &middot; Test rows: 6,163</li>
+        </ul>
+        <p><strong>Why client grouping matters:</strong> if pages from the same client appear in both training and test data, the model can memorize client-specific patterns and look better than it actually is. Grouping by client means the test set contains only clients never seen during training, so the evaluation asks a harder and more honest question: <em>does the model generalize to a client it has not seen?</em> A random-row split was run as a diagnostic, and its results are reported alongside the grouped results because the gap between them is itself a finding (see Results).</p>
+
+        <h3>Leakage checks</h3>
+        <p>A feature-level leakage audit was run on the final feature set. It confirmed that none of the known target-source fields or identifiers (the target itself, <code>trend_direction</code>, <code>trend_pct</code>, <code>client_id</code>, <code>content_id</code>) are model features, and it reviewed the timing of the historical window features. A deliberate leakage diagnostic showed the stakes: when target-derived trend information was introduced as a feature, evaluation performance became artificially perfect (Precision@50 = 1.0) compared with 0.70 for the clean grouped model &mdash; clear evidence of leakage rather than model quality. A column-level audit documents the checks but does not prove complete temporal safety for every production scenario; a production deployment would require explicit feature and prediction timestamps and a point-in-time pipeline.</p>
+
+        <figure class="figure">
+          <img src="assets/charts/top_feature_importance.svg" alt="Bar chart of feature importances from the repository's reference pipeline Random Forest, led by days with impressions, log impressions over 90 days, average position, and content age." width="960" height="520" loading="lazy">
+          <figcaption>Feature importance from the repository&rsquo;s reference-pipeline Random Forest, trained on the same 30,000-page starter dataset. The capstone&rsquo;s final model uses a smaller, deliberately chosen set of six predictors (content age, days since last update, 90-day impressions, average position, click-through rate, and word count).</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ============ RESULTS ============ -->
+    <section id="results" class="section" aria-labelledby="results-heading">
+      <div class="article-col">
+        <h2 id="results-heading">Results vs. Baseline</h2>
+        <p>The Random Forest and the Week-4 rule baseline were evaluated on the <strong>same client-grouped holdout</strong> (7 held-out clients, zero overlap with training). The table below is the primary comparison; every value comes from the capstone validation output.</p>
+      </div>
+
+      <div class="metric-grid" role="list" aria-label="Metric highlight cards">
+        <div class="metric-card" role="listitem">
+          <h4>Precision@20</h4>
+          <p class="metric-card__values"><span class="metric-card__base">0.55</span> &rarr; <strong class="metric-card__model">0.85</strong></p>
+          <p class="metric-card__delta metric-card__delta--up">+0.30 &middot; best top-of-queue gain</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h4>Precision@50</h4>
+          <p class="metric-card__values"><span class="metric-card__base">0.52</span> &rarr; <strong class="metric-card__model">0.70</strong></p>
+          <p class="metric-card__delta metric-card__delta--up">+0.18</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h4>Accuracy</h4>
+          <p class="metric-card__values"><span class="metric-card__base">0.4897</span> &rarr; <strong class="metric-card__model">0.5629</strong></p>
+          <p class="metric-card__delta metric-card__delta--up">+0.0732</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h4>Precision</h4>
+          <p class="metric-card__values"><span class="metric-card__base">0.5005</span> &rarr; <strong class="metric-card__model">0.5656</strong></p>
+          <p class="metric-card__delta metric-card__delta--up">+0.0651</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h4>Recall</h4>
+          <p class="metric-card__values"><span class="metric-card__base">0.6932</span> &rarr; <strong class="metric-card__model">0.6227</strong></p>
+          <p class="metric-card__delta metric-card__delta--down">&minus;0.0705 &middot; trade-off</p>
+        </div>
+        <div class="metric-card" role="listitem">
+          <h4>F1</h4>
+          <p class="metric-card__values"><span class="metric-card__base">0.5813</span> &rarr; <strong class="metric-card__model">0.5928</strong></p>
+          <p class="metric-card__delta metric-card__delta--up">+0.0115</p>
+        </div>
+      </div>
+
+      <div class="article-col">
+        <h3>Comparison table</h3>
+        <table class="table">
+          <caption>Random Forest vs. Week-4 rule baseline on the same client-grouped holdout</caption>
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              <th scope="col">Week-4 rule baseline</th>
+              <th scope="col">Random Forest</th>
+              <th scope="col">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Precision@20</th><td>0.55</td><td>0.85</td><td class="delta up">+0.30</td></tr>
+            <tr><th scope="row">Precision@50</th><td>0.52</td><td>0.70</td><td class="delta up">+0.18</td></tr>
+            <tr><th scope="row">Accuracy</th><td>0.4897</td><td>0.5629</td><td class="delta up">+0.0732</td></tr>
+            <tr><th scope="row">Precision</th><td>0.5005</td><td>0.5656</td><td class="delta up">+0.0651</td></tr>
+            <tr><th scope="row">Recall</th><td>0.6932</td><td>0.6227</td><td class="delta down">&minus;0.0705</td></tr>
+            <tr><th scope="row">F1</th><td>0.5813</td><td>0.5928</td><td class="delta up">+0.0115</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Baseline vs. model, visually</h3>
+        <figure class="figure">
+          <div class="barchart" role="img"
+            aria-label="Grouped bar chart comparing the Week-4 rule baseline and the Random Forest across six metrics on the client-grouped holdout. Precision at 20: 0.55 versus 0.85. Precision at 50: 0.52 versus 0.70. Accuracy: 0.4897 versus 0.5629. Precision: 0.5005 versus 0.5656. Recall: 0.6932 versus 0.6227. F1: 0.5813 versus 0.5928.">
+            <div class="barchart__group">
+              <span class="barchart__label">Precision@20</span>
+              <div class="barchart__bars">
+                <div class="bar bar--baseline" style="--h:55%"><span>0.55</span></div>
+                <div class="bar bar--model" style="--h:85%"><span>0.85</span></div>
+              </div>
+            </div>
+            <div class="barchart__group">
+              <span class="barchart__label">Precision@50</span>
+              <div class="barchart__bars">
+                <div class="bar bar--baseline" style="--h:52%"><span>0.52</span></div>
+                <div class="bar bar--model" style="--h:70%"><span>0.70</span></div>
+              </div>
+            </div>
+            <div class="barchart__group">
+              <span class="barchart__label">Accuracy</span>
+              <div class="barchart__bars">
+                <div class="bar bar--baseline" style="--h:49%"><span>0.49</span></div>
+                <div class="bar bar--model" style="--h:56%"><span>0.56</span></div>
+              </div>
+            </div>
+            <div class="barchart__group">
+              <span class="barchart__label">Precision</span>
+              <div class="barchart__bars">
+                <div class="bar bar--baseline" style="--h:50%"><span>0.50</span></div>
+                <div class="bar bar--model" style="--h:57%"><span>0.57</span></div>
+              </div>
+            </div>
+            <div class="barchart__group">
+              <span class="barchart__label">Recall</span>
+              <div class="barchart__bars">
+                <div class="bar bar--baseline" style="--h:69%"><span>0.69</span></div>
+                <div class="bar bar--model" style="--h:62%"><span>0.62</span></div>
+              </div>
+            </div>
+            <div class="barchart__group">
+              <span class="barchart__label">F1</span>
+              <div class="barchart__bars">
+                <div class="bar bar--baseline" style="--h:58%"><span>0.58</span></div>
+                <div class="bar bar--model" style="--h:59%"><span>0.59</span></div>
+              </div>
+            </div>
+          </div>
+          <figcaption>Week-4 rule baseline (gray) vs. Random Forest (accent) on the same client-grouped holdout. Bars are drawn from the exact table values above (labels rounded to two decimals for readability; the table retains the full precision).</figcaption>
+        </figure>
+      </div>
+
+      <div class="article-col">
+        <h3>Reading the result honestly: gains <em>and</em> trade-offs</h3>
+        <ul>
+          <li><strong>Precision@20 improves substantially</strong> &mdash; from 0.55 to 0.85. In this held-out evaluation, 17 of the top 20 model-ranked recommendations were labeled declining, versus 11 of the top 20 from the baseline.</li>
+          <li><strong>Precision@50 improves</strong> &mdash; from 0.52 to 0.70, so the improvement holds when the queue is expanded.</li>
+          <li><strong>Accuracy improves</strong> &mdash; from 0.4897 to 0.5629.</li>
+          <li><strong>F1 improves slightly</strong> &mdash; from 0.5813 to 0.5928.</li>
+          <li><strong>Recall decreases</strong> &mdash; from 0.6932 to 0.6227. The model&rsquo;s prioritization strategy may miss some pages labeled as declining.</li>
+        </ul>
+        <p>This is <strong>not</strong> an across-the-board improvement. The model appears better suited to prioritizing top-ranked review candidates, while the recall trade-off should be weighed depending on the operational objective: if the goal is to find as many declining pages as possible (broad coverage), the rule baseline caught more of them; if the goal is to make the most of a small review budget, the model concentrates declining pages near the top of the queue.</p>
+
+        <h3>Why the client-grouped result is the primary one</h3>
+        <p>The validation audit also compared a naive random-row split with the stronger client-grouped holdout for the same model:</p>
+        <table class="table">
+          <caption>Random-row vs. client-grouped evaluation of the Random Forest</caption>
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              <th scope="col">Random-row split</th>
+              <th scope="col">Client-grouped holdout</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Precision@20</th><td>0.85</td><td>0.85</td></tr>
+            <tr><th scope="row">Precision@50</th><td>0.88</td><td>0.70</td></tr>
+            <tr><th scope="row">Accuracy</th><td>0.6835</td><td>0.5629</td></tr>
+            <tr><th scope="row">F1</th><td>0.7192</td><td>0.5928</td></tr>
+          </tbody>
+        </table>
+        <p>Random-row evaluation produces higher Precision@50, accuracy, and F1 because pages from the same clients can appear in both training and test data. The client-grouped holdout is used as the primary result throughout this paper because it is the more conservative, honest estimate for the unseen-client use case. On this evaluation, the model&rsquo;s primary value is concentrated at the top of the ranked queue.</p>
+
+        <h3>What the result means operationally</h3>
+        <p>The results support using the model as a <strong>decision-support ranking tool</strong>, not as an automated decision-maker. If a review team can inspect roughly 20 pages, the held-out evaluation suggests the Random Forest ranking concentrates more declining pages near the top of the queue than the rule baseline. A recommendation triggers human review &mdash; where context can determine whether an observed decline reflects content quality, seasonality, competition, search-result changes, or something else &mdash; rather than an automatic content change.</p>
+      </div>
+    </section>
+
+    <!-- ============ LIMITATIONS ============ -->
+    <section id="limitations" class="section" aria-labelledby="limitations-heading">
+      <div class="article-col">
+        <h2 id="limitations-heading">Limitations &amp; Honest Framing</h2>
+        <p>This section states what the work cannot claim. Every item below is supported by the notebooks or is an explicit constraint of the experimental design.</p>
+
+        <h3>Observational study, not causal evidence</h3>
+        <p>The results are based on patterns observed in the provided anonymized dataset. The model identifies associations between historical signals and the declining-content label; it does not establish that any individual feature <em>causes</em> content performance to decline. A page that has not been updated recently may appear frequently among declining pages, but this does not prove that updating it will improve performance.</p>
+
+        <h3>Proxy label, not a complete measure of content quality</h3>
+        <p>The target is derived from an observed trend (<code>trend_direction == "down"</code>). A declining trend can have multiple explanations &mdash; changes in search competition, seasonality, search-result layout, indexing, user intent, or factors not in the feature set. A positive prediction is a recommendation for review, not proof that the content is poor or requires a refresh.</p>
+
+        <h3>Dataset scope</h3>
+        <p>The analysis is limited to the 30,000-page anonymized starter slice. It documents trailing-90-day feature windows but does not claim a public calendar date range, and it should not be read as a complete production data specification.</p>
+
+        <h3>Generalization is evaluated on a limited number of clients</h3>
+        <p>The grouped holdout uses 25 training clients and 7 test clients with zero overlap &mdash; a stronger evaluation than random-row splitting, but still a small number of held-out client groups. Performance may differ for clients, content types, industries, traffic levels, or search environments not well represented here.</p>
+
+        <h3>Dataset-specific performance and temporal drift</h3>
+        <p>The reported metrics are measured on this dataset and validation design; Precision@20 = 0.85 should not be read as a guaranteed improvement in every future environment. Model performance can change as the data distribution, client population, search behavior, or underlying search systems change. The action queue can also become stale: the monitoring plan tracks shifts in the label rate, feature distributions, model-score distribution, and performance on newly labeled held-out data before any retraining decision.</p>
+
+        <h3>Historical metrics and temporal safety</h3>
+        <p>The feature set includes historical signals such as trailing-90-day impressions. Column-level leakage checks and exclusions were performed, but a column-level audit cannot prove complete temporal safety for every production scenario. A production implementation would require explicit feature timestamps, prediction timestamps, and a point-in-time pipeline so every feature available to the model existed before the prediction decision.</p>
+
+        <h3>Ranking vs. causal inference</h3>
+        <p>The system ranks pages for review; it does not measure whether reviewing or refreshing recommended pages increases traffic, clicks, rankings, or other downstream outcomes. That would require a separate intervention-tracking design. The evaluation therefore reports predictive and ranking performance, not business impact.</p>
+
+        <h3>Threshold dependence of the operational queue</h3>
+        <p>The out-of-sample review queue maps model probabilities into priority buckets (HIGH, MEDIUM, LOW &mdash; 1,201, 1,870, and 3,092 of 6,163 rows respectively). Those buckets depend on the chosen probability cutoffs, so the distribution of effort across priorities would change with different thresholds.</p>
+
+        <h3>Recall trade-off</h3>
+        <p>Recall fell from 0.6932 (baseline) to 0.6227 (Random Forest), and 1,188 false negatives were observed in the grouped test set (19.28% of test rows). The model&rsquo;s prioritization strategy may miss declining pages, so it is best suited to prioritizing a limited review queue rather than to claiming it identifies every declining page.</p>
+
+        <h3>The model does not replace human judgment</h3>
+        <p>A high-ranked page should be reviewed alongside context the model does not see: seasonality, content strategy, marketing campaigns, search competition, business priorities, and editorial constraints. The recommended workflow is <strong>model ranking &rarr; human review &rarr; decision &rarr; action &rarr; post-action measurement</strong>.</p>
+      </div>
+    </section>
+
+    <!-- ============ RECOMMENDATIONS ============ -->
+    <section id="recommendations" class="section" aria-labelledby="recommendations-heading">
+      <div class="article-col">
+        <h2 id="recommendations-heading">Ranked Recommendations</h2>
+        <p>The action playbook (<code>w07_action_playbook.ipynb</code>) turns the validated model output into a human-review priority list. The queue answers one narrow question: <em>which pages should a reviewer inspect first?</em> The model score determines priority; reason codes tell the reviewer what to investigate. Counts below come from the 6,163-row out-of-sample queue.</p>
+      </div>
+
+      <ol class="recommendations">
+        <li class="recommendation">
+          <div class="recommendation__head">
+            <span class="recommendation__rank">1</span>
+            <h3>Review multi-signal candidates first</h3>
+            <span class="recommendation__badge">Highest priority</span>
+          </div>
+          <p><strong>Action:</strong> Full human review of search intent, content accuracy, freshness, competitive context, technical factors, recent performance, and business value. Multi-signal candidates (522 of 6,163 queue rows) are the highest-priority archetype for comprehensive review.</p>
+          <p><strong>Reason:</strong> When several observed signals point the same way (reason codes such as <code>AGE</code>, <code>STALE</code>, <code>VISIBILITY</code>, <code>CTR</code>, <code>PERFORMANCE</code> combined), the case for earlier inspection is stronger than any single signal alone.</p>
+          <p><strong>Priority / confidence:</strong> Priority 1 &middot; HIGH queue bucket.</p>
+          <p><strong>Decision purpose:</strong> Focus the first review pass on the most defensible candidates. Multiple signals support priority &mdash; they do not prove the content caused the observed decline.</p>
+        </li>
+
+        <li class="recommendation">
+          <div class="recommendation__head">
+            <span class="recommendation__rank">2</span>
+            <h3>Review freshness and update candidates</h3>
+            <span class="recommendation__badge">Priority 2</span>
+          </div>
+          <p><strong>Action:</strong> Review factual accuracy, topic freshness, changes in user needs, and opportunities to update content. Refresh-candidate archetype (90 queue rows).</p>
+          <p><strong>Reason:</strong> Pages with relatively high content age or a long time since their last update carry <code>AGE</code> / <code>STALE</code> reason codes. Observed directionally, the top-20% model-score band had a lower median content age (181 days) than the rest of the queue (326 days) in this test population &mdash; an observed difference, not a causal claim.</p>
+          <p><strong>Priority / confidence:</strong> Priority 2 &middot; MEDIUM&ndash;HIGH queue buckets.</p>
+          <p><strong>Decision purpose:</strong> Decide which older or rarely-updated pages deserve an update review. Verify the topic changes, facts are current, the page was not just edited, and the performance pattern is persistent before acting.</p>
+        </li>
+
+        <li class="recommendation">
+          <div class="recommendation__head">
+            <span class="recommendation__rank">3</span>
+            <h3>Review visibility candidates</h3>
+            <span class="recommendation__badge">Priority 3</span>
+          </div>
+          <p><strong>Action:</strong> Review search intent, page structure, internal linking, content coverage, and competitive context. Visibility-candidate archetype (45 queue rows).</p>
+          <p><strong>Reason:</strong> Weaker observed search position carries the <code>VISIBILITY</code> reason code. A weaker position should trigger investigation rather than an automatic refresh.</p>
+          <p><strong>Priority / confidence:</strong> Priority 3 &middot; MEDIUM queue bucket.</p>
+          <p><strong>Decision purpose:</strong> Decide whether a positioning issue is a content, structure, or competition problem. Verify intent, competing results, page structure, and persistence before acting.</p>
+        </li>
+
+        <li class="recommendation">
+          <div class="recommendation__head">
+            <span class="recommendation__rank">4</span>
+            <h3>Review CTR candidates</h3>
+            <span class="recommendation__badge">Priority 4</span>
+          </div>
+          <p><strong>Action:</strong> Review title and meta presentation, search-intent alignment, and how the page appears relative to competing results. CTR-candidate archetype (275 queue rows).</p>
+          <p><strong>Reason:</strong> Relatively low click-through rate carries the <code>CTR</code> reason code and is the most frequent single-signal archetype in the queue.</p>
+          <p><strong>Priority / confidence:</strong> Priority 4 &middot; MEDIUM queue bucket.</p>
+          <p><strong>Decision purpose:</strong> Decide whether presentation, intent alignment, or SERP layout explains low CTR. Low CTR alone does not prove the content needs rewriting.</p>
+        </li>
+
+        <li class="recommendation">
+          <div class="recommendation__head">
+            <span class="recommendation__rank">5</span>
+            <h3>Investigate performance candidates</h3>
+            <span class="recommendation__badge">Priority 5</span>
+          </div>
+          <p><strong>Action:</strong> Investigate recent performance and demand context before allocating refresh effort. Performance-candidate archetype (1 queue row in this holdout).</p>
+          <p><strong>Reason:</strong> Relatively weak recent performance carries the <code>PERFORMANCE</code> reason code.</p>
+          <p><strong>Priority / confidence:</strong> Priority 5 &middot; MEDIUM&ndash;LOW queue buckets.</p>
+          <p><strong>Decision purpose:</strong> Decide whether weak recent performance is demand-driven (seasonality, changing search interest), temporary, technical, or worth the review effort at all.</p>
+        </li>
+
+        <li class="recommendation">
+          <div class="recommendation__head">
+            <span class="recommendation__rank">6</span>
+            <h3>Monitor lower-priority candidates</h3>
+            <span class="recommendation__badge">Priority 6</span>
+          </div>
+          <p><strong>Action:</strong> Track future performance and reconsider the page if its ranking or observed signals change materially. The Monitor archetype covers 5,230 of 6,163 queue rows &mdash; most of the queue.</p>
+          <p><strong>Reason:</strong> Lower model-based priority should not immediately consume limited review capacity.</p>
+          <p><strong>Priority / confidence:</strong> Priority 6 &middot; LOW queue bucket.</p>
+          <p><strong>Decision purpose:</strong> Protect review capacity so higher-ranked candidates get attention first, while keeping lower-priority pages on a watch list.</p>
+        </li>
+      </ol>
+
+      <div class="article-col">
+        <h3>Reason codes make the queue interpretable</h3>
+        <table class="table">
+          <caption>Reason codes used by the action queue and their interpretations</caption>
+          <thead>
+            <tr><th scope="col">Reason code</th><th scope="col">Interpretation</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>AGE</code></td><td>Content age is relatively high in the modeling population</td></tr>
+            <tr><td><code>STALE</code></td><td>Time since the last update is relatively high</td></tr>
+            <tr><td><code>VISIBILITY</code></td><td>Average search position is relatively weak among pages with usable position data</td></tr>
+            <tr><td><code>CTR</code></td><td>Click-through rate is relatively low</td></tr>
+            <tr><td><code>PERFORMANCE</code></td><td>Recent impressions are relatively low</td></tr>
+            <tr><td><code>MULTI</code></td><td>Multiple signals point in the same direction</td></tr>
+          </tbody>
+        </table>
+        <p>Reason codes describe observed characteristics. They are not causal explanations of why a page declined.</p>
+
+        <h3>Human-review gate and automation boundary</h3>
+        <p>Before approving a content action, a reviewer checks: search intent, accuracy, freshness, competitive context, performance context, technical context, business value, and recent edits. The system should never automatically publish rewritten content, delete content, alter factual claims, change prices or legally important information, modify medical or safety-critical information, make irreversible SEO changes, declare a page permanently &ldquo;low quality&rdquo;, or claim that a refresh caused an improvement. The safe boundary is <strong>model ranking + explanation &rarr; human review &rarr; human decision</strong>.</p>
+
+        <h3>Monitoring and when to revisit the model</h3>
+        <p>The queue becomes stale when the declining-label rate, feature distributions, or model-score distributions shift materially, when the content population changes, when the target definition changes, or when grouped-holdout performance degrades on newly labeled data. Those are <strong>investigation triggers, not automatic retraining commands</strong>; the strongest signal for revisiting the model is degradation on new held-out data evaluated with the same grouped validation logic.</p>
+
+        <figure class="figure figure--row">
+          <figure class="figure__sub">
+            <img src="assets/charts/action_mix.svg" alt="Bar chart of suggested actions from the repository's reference pipeline queue: monitor about 13,100, refresh about 8,180, refresh and review click-through rate about 6,660, refresh and review engagement about 1,990, and expand and refresh 82." width="960" height="520" loading="lazy">
+            <figcaption>Suggested-action mix from the repository&rsquo;s reference pipeline on the full 30,000-page starter dataset.</figcaption>
+          </figure>
+          <figure class="figure__sub">
+            <img src="assets/charts/confidence_mix.svg" alt="Bar chart of review-queue confidence from the reference pipeline: high about 3,600, medium about 11,400, low about 15,000." width="960" height="520" loading="lazy">
+            <figcaption>Review-queue confidence mix from the reference pipeline on the full 30,000-page starter dataset.</figcaption>
+          </figure>
+          <figure class="figure__sub">
+            <img src="assets/charts/top_reason_codes.svg" alt="Bar chart of the top refresh reason codes from the reference pipeline, led by declining with demand about 13,200 and visible model opportunity about 10,700." width="960" height="520" loading="lazy">
+            <figcaption>Top refresh reason codes from the reference pipeline on the full 30,000-page starter dataset.</figcaption>
+          </figure>
+        </figure>
+
+        <h3>Final recommendation</h3>
+        <p>Based on the measured results, the recommended deployment pattern is to use the Random Forest as a <strong>human-review prioritization system</strong>: use the model to decide what to inspect first, use reason codes to understand the observed signals, and require human review before making content changes. This keeps the system aligned with the evidence produced by the project while avoiding unsupported causal or fully automated claims.</p>
+      </div>
+    </section>
+
+    <!-- ============ REPRODUCIBILITY ============ -->
+    <section id="reproducibility" class="section" aria-labelledby="reproducibility-heading">
+      <div class="article-col">
+        <h2 id="reproducibility-heading">Reproducibility</h2>
+        <p>All code, analysis, and results live in the public repository. The notebooks document the methodology and produce the numbers reported here, including the fixed random seed (<code>random_state=42</code>) and the client-grouped split. A fresh clone can re-run the work and inspect each step.</p>
+        <ul class="links-list">
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship">Repository &mdash; flyrank-ml-internship</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/capstone.ipynb">Capstone notebook (paper mirrors it)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/w01_research_question.ipynb">Research question (ML-02)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/w03_data_contract.ipynb">Data contract (ML-04)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/w03_feature_leakage_check.ipynb">Feature leakage / privacy check (ML-05)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/w04_baseline_score.ipynb">Baseline score and top-20 review (ML-07)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/w05_model.ipynb">Model (ML-08)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/w06_validation_audit.ipynb">Validation and claim audit (ML-09)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/work/notebooks/w07_action_playbook.ipynb">Action playbook (ML-10)</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/outputs/model_report.md">Reference-pipeline model report</a></li>
+          <li><a href="https://github.com/RaihanBasha7/flyrank-ml-internship/blob/main/outputs/refresh_queue_sample.csv">Reference-pipeline ranked queue sample</a></li>
+        </ul>
+        <p>The charts shown on this page are generated from the repository&rsquo;s reference pipeline on the bundled 30,000-page starter dataset; the primary results table is reproduced from the capstone validation notebook output. Because the starter dataset ships with the repository and is regenerated by running <code>python scripts/run_all.py</code>, the figures and the report can be regenerated locally.</p>
+      </div>
+    </section>
+
+    <!-- ============ ACKNOWLEDGMENTS ============ -->
+    <section class="section" aria-labelledby="acknowledgments-heading">
+      <div class="article-col">
+        <h2 id="acknowledgments-heading">Acknowledgments &amp; Data Credit</h2>
+        <p>Built on the <a href="https://flyrank.ai">FlyRank</a> ML Internship dataset.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="article-col">
+      <p>
+        Built on the <a href="https://flyrank.ai">FlyRank</a> ML Internship dataset.
+        <span class="hero__dot" aria-hidden="true">·</span>
+        Raihan Basha &middot; FlyRank ML Internship Capstone
+      </p>
+      <p><a href="https://github.com/RaihanBasha7/flyrank-ml-internship">View the repository on GitHub</a></p>
+    </div>
+  </footer>
+</body>
+</html>
